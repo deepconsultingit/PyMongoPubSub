@@ -56,7 +56,6 @@ def main():
             CLIENT_ID="",
             QUEUE_NAME="myqueue",
             TS=0,
-            ACTION="myaction",
             TOPIC="mytopic",
             PAYLOAD={
                 'value': 1

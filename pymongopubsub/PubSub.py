@@ -1,56 +1,28 @@
 import abc
 import threading
 import time
-import uuid
 import logging
-from logging import config
-import os
 from contextlib import contextmanager
 from threading import Event
 from typing import Callable
-from pymongo.errors import PyMongoError
 
 import pymongo
 from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 from pymongo.database import Database, Collection
-from pymongo.errors import ConnectionFailure
 from bson.objectid import ObjectId
+
 from dataclasses import dataclass, field, asdict
+
+from pymongopubsub.Utils import logConfiguration
+
 
 class PubSubError(Exception):
     pass
 
-log_config = {
-    "version": 1,
-    "root": {
-        "handlers": ["console"],
-        "level": "DEBUG"
-    },
-    "handlers":{
-        "console": {
-            "formatter": "std_out",
-            "class": "logging.StreamHandler",
-            "level": "DEBUG"
-        }
-    },
-    "formatters": {
-        "std_out": {
-            # "format": "%(asctime)s : %(levelname)s : %(module)s : %(funcName)s : %(lineno)d : (Process Details : (%(process)d, %(processName)s), Thread Details : (%(thread)d, %(threadName)s))\nLog : %(message)s",
-            "format": "%(asctime)s : %(levelname)6s : %(module)s : %(name)s : %(funcName)s [%(lineno)5d] # %(message)s",
-            "datefmt": "%d-%m-%Y %I:%M:%S"
-        }
-    },
-}
-
 
 @dataclass
 class AbstractPubSubMessage(abc.ABC):
-    
-    QUEUE_NAME: str
-
-    def __post_init__(self):
-        self.QUEUE_NAME = self.QUEUE_NAME.upper()
-
     def toDict(self):
         return asdict(self)
 
@@ -70,7 +42,6 @@ class PubSubMessage(AbstractPubSubMessage):
     CLIENT_ID: str
     QUEUE_NAME: str
     TS: int
-    ACTION: str
     TOPIC: str
     PAYLOAD: dict
 
@@ -86,31 +57,17 @@ class PubSubConnector(abc.ABC):
     PUBSUB_PUBLISH_COLLECTION = "PUBLISH"
     PUBSUB_DEFAULT_DB = "PSDB"
 
-    PUBSUB_CLOSE_ACTION = "__CLOSE__"
-    PUBSUB_HEARTBEAT_ACTION = "__HEARTBEAT__"
+    PUBSUB_CLOSE_TOPIC = "__CLOSE__"
+    PUBSUB_HEARTBEAT_TOPIC = "__HEARTBEAT__"
     PUBSUB_INACTIVE_CLIENT_TIMEOUT = 30.0
-
-    DEFAULT_LOGGING_FILE = "pubsub_logging.conf"
-    DEFAULT_LOGGING_ENV_KEY = "PUBSUBLOG"
 
     @classmethod
     def createPubSubMongoClient(cls, connectionURI: str) -> MongoClient:
         return MongoClient(connectionURI)
 
     def __init__(self, client: MongoClient, databaseName: str):
-        isLogConfigFile = False
-        config.dictConfig(log_config)
-
-        pubsubLogFileConf = os.getenv(PubSubConnector.DEFAULT_LOGGING_ENV_KEY)
-        if pubsubLogFileConf is None:
-            pubsubLogFileConf = PubSubConnector.DEFAULT_LOGGING_FILE
-
-        if os.path.exists(pubsubLogFileConf) and os.path.isfile(pubsubLogFileConf):
-            config.fileConfig(pubsubLogFileConf, None, True)
-            isLogConfigFile = True
-
-        self.log = logging.getLogger(self.__class__.__name__)
-        self.log.debug(f"Logging configuration {'' if isLogConfigFile else 'NOT '}readed from file.{'' if isLogConfigFile else ' Used default logging configuration.'}")
+        logConfiguration()
+        self.log = logging.getLogger(f"{self.__class__.__name__}_{str(int(time.time() * 1000))}")
 
         self.__client = client
         self.__databaseName = databaseName
@@ -302,10 +259,10 @@ class Server(PubSubConnector):
                     "$and": [
                         {'TS': {'$gt': ts}},
                         {
-                            'ACTION': {
+                            'TOPIC': {
                                 '$in': [
-                                    PubSubConnector.PUBSUB_HEARTBEAT_ACTION,
-                                    PubSubConnector.PUBSUB_CLOSE_ACTION
+                                    PubSubConnector.PUBSUB_HEARTBEAT_TOPIC,
+                                    PubSubConnector.PUBSUB_CLOSE_TOPIC
                                 ]
                             }
                         }
@@ -321,16 +278,15 @@ class Server(PubSubConnector):
                         CLIENT_ID=doc['CLIENT_ID'],
                         QUEUE_NAME=doc['QUEUE_NAME'],
                         TS=doc['TS'],
-                        ACTION=doc['ACTION'],
                         TOPIC=doc['TOPIC'],
                         PAYLOAD=doc['PAYLOAD']
                     )
 
-                    if message.ACTION == PubSubConnector.PUBSUB_HEARTBEAT_ACTION:
+                    if message.TOPIC == PubSubConnector.PUBSUB_HEARTBEAT_TOPIC:
                         self.log.debug(f"Received heartbeat message. Client='{message.CLIENT_ID}'")
                         self.__activeClients[(message.CLIENT_ID, message.QUEUE_NAME)] = message.TS
 
-                    if message.ACTION == PubSubConnector.PUBSUB_CLOSE_ACTION:
+                    if message.TOPIC == PubSubConnector.PUBSUB_CLOSE_TOPIC:
                         self.log.debug(f"Received close message. Client='{message.CLIENT_ID}'")
                         self.__cleanClient(message.CLIENT_ID, message.QUEUE_NAME)
 
@@ -358,10 +314,10 @@ class Server(PubSubConnector):
                     "$and": [
                         {'TS': {'$gt': ts}},
                         {
-                            'ACTION': {
+                            'TOPIC': {
                                 '$nin': [
-                                    PubSubConnector.PUBSUB_HEARTBEAT_ACTION,
-                                    PubSubConnector.PUBSUB_CLOSE_ACTION
+                                    PubSubConnector.PUBSUB_HEARTBEAT_TOPIC,
+                                    PubSubConnector.PUBSUB_CLOSE_TOPIC
                                 ]
                             }
                         }
@@ -377,7 +333,6 @@ class Server(PubSubConnector):
                         CLIENT_ID=doc['CLIENT_ID'],
                         QUEUE_NAME=doc['QUEUE_NAME'],
                         TS=doc['TS'],
-                        ACTION=doc['ACTION'],
                         TOPIC=doc['TOPIC'],
                         PAYLOAD=doc['PAYLOAD']
                     )
@@ -459,8 +414,7 @@ class Client(PubSubConnector):
                 CLIENT_ID=self.clientId,
                 QUEUE_NAME=self.queueName,
                 TS=int(time.time() * 1000),
-                ACTION=PubSubConnector.PUBSUB_CLOSE_ACTION,
-                TOPIC="",
+                TOPIC=PubSubConnector.PUBSUB_CLOSE_TOPIC,
                 PAYLOAD={}
             )
             self.notify(closeMessage)
@@ -552,7 +506,6 @@ class Client(PubSubConnector):
                         CLIENT_ID=doc['CLIENT_ID'],
                         QUEUE_NAME=doc['QUEUE_NAME'],
                         TS=doc['TS'],
-                        ACTION=doc['ACTION'],
                         TOPIC=doc['TOPIC'],
                         PAYLOAD=doc['PAYLOAD']
                     )
@@ -577,8 +530,7 @@ class Client(PubSubConnector):
                 CLIENT_ID=self.clientId,
                 QUEUE_NAME=self.queueName,
                 TS=int(time.time() * 1000),
-                ACTION=PubSubConnector.PUBSUB_HEARTBEAT_ACTION,
-                TOPIC="",
+                TOPIC=PubSubConnector.PUBSUB_HEARTBEAT_TOPIC,
                 PAYLOAD={}
             )
             self.notify(heartbeatMessage)
