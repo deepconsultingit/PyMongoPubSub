@@ -76,7 +76,7 @@ class PubSubConnector(abc.ABC):
         pass
 
     def __validatePublishCollection(self):
-        self.log.debug(f"Validate publish collection. DATABASE='{self.pubSubDatabase.name}' COLLECTION='{PubSubConnector.PUBSUB_PUBLISH_COLLECTION}'")
+        # self.log.debug(f"Validate publish collection. DATABASE='{self.pubSubDatabase.name}' COLLECTION='{PubSubConnector.PUBSUB_PUBLISH_COLLECTION}'")
         isDefined = False
         cl = self.pubSubDatabase.list_collections()
         for c in cl:
@@ -91,6 +91,12 @@ class PubSubConnector(abc.ABC):
                 capped=True,
                 size=PubSubConnector.PUBSUB_CAPPED_SIZE_COLLECTION,
                 max=PubSubConnector.PUBSUB_CAPPED_MAXOBJECTS_COLLECTION
+            )
+            self.pubSubDatabase[PubSubConnector.PUBSUB_PUBLISH_COLLECTION].create_index(
+                [
+                    ('TOPIC', 1),
+                    ('TS', 1)
+                ]
             )
         pass
 
@@ -207,8 +213,8 @@ class Server(PubSubConnector):
             # print(collections)
 
             now = int(time.time() * 1000)
-            clkl = list(self.__activeClients.keys())
-            for clk in clkl:
+            clkL = list(self.__activeClients.keys())
+            for clk in clkL:
                 (cl, qu) = clk
                 ts = self.__activeClients[clk]
                 collectionName = f"{qu}_{str(cl).lower()}"
@@ -329,6 +335,7 @@ class Server(PubSubConnector):
             )
 
             while cursor.alive:
+                processedMessages: list = list()
                 for doc in cursor:
                     message = PubSubMessage(
                         QUEUE_NAME=doc['QUEUE_NAME'],
@@ -350,7 +357,16 @@ class Server(PubSubConnector):
                         self.pubSubDatabase[collName].insert_one(message.toDict())
                         self.log.debug(f"Dispatched to {sub['_id']}. Message -> {str(message)} from client '{message.CLIENT_ID}' and queue '{message.QUEUE_NAME}'")
 
-                    self.publishCollection.delete_one({"_id": doc["_id"]})
+                    processedMessages.append(doc["_id"])
+
+                if len(processedMessages):
+                    self.publishCollection.delete_many(
+                        {
+                            "_id": {
+                                "$in": processedMessages
+                            }
+                        }
+                    )
                 time.sleep(0.025)
             # We end up here if the find() returned no documents or if the
             # tailable cursor timed out (no new documents were added to the
@@ -446,6 +462,11 @@ class Client(PubSubConnector):
             size=PubSubConnector.PUBSUB_CAPPED_SIZE_COLLECTION,
             max=PubSubConnector.PUBSUB_CAPPED_MAXOBJECTS_COLLECTION
         )
+        self.pubSubDatabase[self.collectionName].create_index(
+            [
+                ('TS', 1)
+            ]
+        )
 
         self.pubSubDatabase[self.collectionName].insert_one(
             {
@@ -502,6 +523,7 @@ class Client(PubSubConnector):
                 oplog_replay=True
             )
             while cursor.alive:
+                processedMessages: list = list()
                 for doc in cursor:
                     message = PubSubMessage(
                         QUEUE_NAME=doc['QUEUE_NAME'],
@@ -513,7 +535,17 @@ class Client(PubSubConnector):
 
                     if callable(self.__callback):
                         self.__callback(message)
-                    self.pubSubDatabase[self.collectionName].delete_one({"_id": doc["_id"]})
+
+                    processedMessages.append(doc["_id"])
+
+                if len(processedMessages):
+                    self.pubSubDatabase[self.collectionName].delete_many(
+                        {
+                            "_id": {
+                                "$in": processedMessages
+                            }
+                        }
+                    )
                 time.sleep(0.025)
                 # We end up here if the find() returned no documents or if the
                 # tailable cursor timed out (no new documents were added to the
