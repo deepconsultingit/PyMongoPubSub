@@ -25,7 +25,7 @@ __logConf = {
         "formatters": {
             "std_out": {
                 "format": "%(asctime)s : %(levelname)6s : %(module)s : %(name)s : %(funcName)s [%(lineno)5d] # %(message)s",
-                "datefmt": "%y-%m-%dT%H:%M:%S"
+                "datefmt": "%Y-%m-%dT%H:%M:%S"
             }
         },
     }

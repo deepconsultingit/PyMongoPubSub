@@ -53,9 +53,7 @@ from pymongo import MongoClient
 def main():
     with Client(MongoClient()).context() as client:
         client.notify(PubSubMessage(
-            CLIENT_ID="",
             QUEUE_NAME="myqueue",
-            TS=0,
             TOPIC="mytopic",
             PAYLOAD={
                 'value': 1
@@ -65,3 +63,5 @@ def main():
 if __name__ == '__main__':
     main()
 ```
+
+NOTE: the PubSubMessage has 2 optional fields (CLIENT_ID and TS) that are initialized to None and UTS (Unix TimeStamp) respectively. The method "notify" will set these fields accordingly with the client info.

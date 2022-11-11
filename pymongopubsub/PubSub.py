@@ -39,11 +39,11 @@ class PubSubSubscription(AbstractPubSubMessage):
 
 @dataclass
 class PubSubMessage(AbstractPubSubMessage):
-    CLIENT_ID: str
     QUEUE_NAME: str
-    TS: int
     TOPIC: str
     PAYLOAD: dict
+    CLIENT_ID: str = field(default=None)
+    TS: int = field(default_factory=lambda: int(time.time() * 1000))
 
     def __post_init__(self):
         super(AbstractPubSubMessage, self).__init__()
@@ -159,6 +159,7 @@ class Server(PubSubConnector):
                 ]
             }
         )
+        pass
 
     def __dropCollectionByName(self, collectionName: str):
         if collectionName is None or collectionName not in list(self.pubSubDatabase.list_collection_names()):
@@ -275,11 +276,11 @@ class Server(PubSubConnector):
             while cursor.alive:
                 for doc in cursor:
                     message = PubSubMessage(
-                        CLIENT_ID=doc['CLIENT_ID'],
                         QUEUE_NAME=doc['QUEUE_NAME'],
-                        TS=doc['TS'],
                         TOPIC=doc['TOPIC'],
-                        PAYLOAD=doc['PAYLOAD']
+                        PAYLOAD=doc['PAYLOAD'],
+                        CLIENT_ID=doc['CLIENT_ID'],
+                        TS=doc['TS'],
                     )
 
                     if message.TOPIC == PubSubConnector.PUBSUB_HEARTBEAT_TOPIC:
@@ -291,12 +292,12 @@ class Server(PubSubConnector):
                         self.__cleanClient(message.CLIENT_ID, message.QUEUE_NAME)
 
                     self.publishCollection.delete_one({"_id": doc["_id"]})
-                time.sleep(0.05)
+                time.sleep(0.025)
             # We end up here if the find() returned no documents or if the
             # tailable cursor timed out (no new documents were added to the
-            # collection for more than 0.2 second).
+            # collection for more than 0.1 second).
             cursor.close()
-            time.sleep(0.2)
+            time.sleep(0.1)
             pass  # End while __isRunning
         pass  # End function
 
@@ -330,32 +331,32 @@ class Server(PubSubConnector):
             while cursor.alive:
                 for doc in cursor:
                     message = PubSubMessage(
-                        CLIENT_ID=doc['CLIENT_ID'],
                         QUEUE_NAME=doc['QUEUE_NAME'],
-                        TS=doc['TS'],
                         TOPIC=doc['TOPIC'],
-                        PAYLOAD=doc['PAYLOAD']
+                        PAYLOAD=doc['PAYLOAD'],
+                        CLIENT_ID=doc['CLIENT_ID'],
+                        TS=doc['TS'],
                     )
 
-                    subl = self.pubSubRegistryCollection.find({
+                    subC = self.pubSubRegistryCollection.find({
                         '$and': [
                             {'QUEUE_NAME': message.QUEUE_NAME},
                             {'_id': {'$ne': message.CLIENT_ID}}
                         ]
                     })
 
-                    for sub in subl:
+                    for sub in subC:
                         collName = sub['COLLECTION_NAME']
                         self.pubSubDatabase[collName].insert_one(message.toDict())
                         self.log.debug(f"Dispatched to {sub['_id']}. Message -> {str(message)} from client '{message.CLIENT_ID}' and queue '{message.QUEUE_NAME}'")
 
                     self.publishCollection.delete_one({"_id": doc["_id"]})
-                time.sleep(0.05)
+                time.sleep(0.025)
             # We end up here if the find() returned no documents or if the
             # tailable cursor timed out (no new documents were added to the
-            # collection for more than 0.2 second).
+            # collection for more than 0.1 second).
             cursor.close()
-            time.sleep(0.2)
+            time.sleep(0.1)
             pass  # End while __isRunning
         pass  # End function
 
@@ -411,11 +412,11 @@ class Client(PubSubConnector):
         try:
             self.log.debug(f"Close message. CLIENT='{str(self.clientId).lower()}'")
             closeMessage = PubSubMessage(
-                CLIENT_ID=self.clientId,
                 QUEUE_NAME=self.queueName,
-                TS=int(time.time() * 1000),
                 TOPIC=PubSubConnector.PUBSUB_CLOSE_TOPIC,
-                PAYLOAD={}
+                PAYLOAD={},
+                CLIENT_ID=self.clientId,
+                TS=int(time.time() * 1000),
             )
             self.notify(closeMessage)
 
@@ -435,9 +436,9 @@ class Client(PubSubConnector):
         if _callback is None or not callable(_callback):
             return
 
-        self.__queueName = queue.strip().replace(' ', '').upper()   # This entry is fundamental to enable the
-                                                                    # property "collectionName" that is based on a
-                                                                    # valid value (not None) of self.__queueName
+        self.__queueName = queue.strip().replace(' ', '')   # This entry is fundamental to enable the
+                                                            # property "collectionName" that is based on a
+                                                            # valid value (not None) of self.__queueName
         self.log.debug(f"Create capped collection. COLLECTION='{self.collectionName}' QUEUE='{self.queueName}'")
         self.pubSubDatabase.create_collection(
             self.collectionName,
@@ -470,7 +471,7 @@ class Client(PubSubConnector):
         self.__internalThread.start()
         self.log.debug(f"Start heartbeat thread. CLIENT='{str(self.clientId).lower()}'")
         self.__heartbeatThread.start()
-        self.log.debug(f"Client {str(self.clientId).lower()} subscribed to queue {self.queueName}")
+        self.log.debug(f"Client {str(self.clientId).lower()} subscribed to queue ´{self.queueName}´")
 
     def notify(self, message: PubSubMessage):
         if message.TS is None or message.TS == 0 or message.TS == -1:
@@ -503,35 +504,34 @@ class Client(PubSubConnector):
             while cursor.alive:
                 for doc in cursor:
                     message = PubSubMessage(
-                        CLIENT_ID=doc['CLIENT_ID'],
                         QUEUE_NAME=doc['QUEUE_NAME'],
-                        TS=doc['TS'],
                         TOPIC=doc['TOPIC'],
-                        PAYLOAD=doc['PAYLOAD']
+                        PAYLOAD=doc['PAYLOAD'],
+                        CLIENT_ID=doc['CLIENT_ID'],
+                        TS=doc['TS'],
                     )
 
                     if callable(self.__callback):
                         self.__callback(message)
                     self.pubSubDatabase[self.collectionName].delete_one({"_id": doc["_id"]})
-                time.sleep(0.05)
+                time.sleep(0.025)
                 # We end up here if the find() returned no documents or if the
                 # tailable cursor timed out (no new documents were added to the
-                # collection for more than 0.2 second).
+                # collection for more than 0.1 second).
             cursor.close()
-            time.sleep(0.2)
+            time.sleep(0.1)
             pass  # End while __isRunning
         pass  # End function
 
     def __heartbeat(self):
         while self.__isRunning:
             self.log.debug(f"Heartbeat message. CLIENT='{str(self.clientId).lower()}'")
-
             heartbeatMessage = PubSubMessage(
-                CLIENT_ID=self.clientId,
                 QUEUE_NAME=self.queueName,
-                TS=int(time.time() * 1000),
                 TOPIC=PubSubConnector.PUBSUB_HEARTBEAT_TOPIC,
-                PAYLOAD={}
+                PAYLOAD={},
+                CLIENT_ID=self.clientId,
+                TS=int(time.time() * 1000),
             )
             self.notify(heartbeatMessage)
 
